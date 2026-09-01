@@ -1,0 +1,22 @@
+/* Settings: the inline connection-test result. */
+.rw-conn-status:empty {
+  display: none;
+}
+.rw-conn-status {
+  margin-top: var(--size-2-2);
+  font-size: var(--font-ui-smaller);
+}
+.rw-conn-status.is-ok {
+  color: var(--text-success);
+}
+.rw-conn-status.is-error {
+  color: var(--text-error);
+}
+
+/* A Readwise token is unscoped, so the warning stays visible rather than
+   hiding behind a tooltip. */
+.rw-token-scope {
+  margin-top: var(--size-2-2);
+  color: var(--text-muted);
+  font-size: var(--font-ui-smaller);
+}
