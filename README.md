@@ -20,7 +20,13 @@ Nothing is implemented yet. The design and the build order live in:
   decisions R1–R9.
 - [docs/plan.md](docs/plan.md) — the port map from
   [obsidian-linkwarden](https://github.com/Heiss/obsidian-linkwarden),
-  milestones M0–M7, and the test plan.
+  milestones M-1–M6, and the test plan.
+- [docs/red-team.md](docs/red-team.md) — what could go wrong, which
+  assumptions are load-bearing, and what is still unverified.
+
+This plugin is a port of
+[obsidian-linkwarden](https://github.com/Heiss/obsidian-linkwarden) (MIT, same
+author) and shares its architecture.
 
 ## License
 
