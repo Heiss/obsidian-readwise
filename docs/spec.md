@@ -1,6 +1,6 @@
 # Obsidian ↔ Readwise Reader Plugin — Requirements / Spec
 
-_As of: 2026-09-01 · **Status: v0.2 — decisions R1–R11 drafted; API surface verified against the official [Reader API docs](https://readwise.io/reader_api)** · not yet built_
+_As of: 2026-09-01 · **Status: v0.3 — decisions R1–R12; highlights come from the Readwise v2 export, colour comes from tags** · not yet built_
 
 > **What this is:** a port of [obsidian-linkwarden](https://github.com/Heiss/obsidian-linkwarden)
 > to the [Readwise Reader API](https://readwise.io/reader_api), keeping the same
@@ -43,11 +43,11 @@ the whole port. Everything else is a rename.
 | Id type | integer PK | opaque ULID-ish string, lowercase alphanumeric, ~25–28 chars | ids become **strings** everywhere: parse, index keys, block ids. **Length is not fixed** — do not hardcode 26 (R10) |
 | Deep link | `<base>/links/<id>`, 3 configurable targets | `https://read.readwise.io/<location>/read/<id>` — the location is *in the path* | **deep-link-target setting is deleted**, but the parser must be location-agnostic (R10) |
 | Search | server-side `GET /api/v1/search?searchQueryString=` | **none.** `/v3/list/` filters only by `id`, `updatedAfter`, `location`, `category`, `tag`, `limit` | a **local document index** is required (F7) |
-| Highlights per source | `GET /api/v1/links/{id}/highlights` | **no per-parent endpoint.** Highlights are themselves documents (`category=highlight`) whose `parent_id` is the article; notes are documents (`category=note`) whose `parent_id` is the *highlight* | a **local highlight index** grouped by `parent_id` is required (F7) |
+| Highlights per source | `GET /api/v1/links/{id}/highlights` | **no per-parent endpoint** in either API. Reader v3 exposes highlights as individual documents (one page per ~100 highlights); Readwise v2 `GET /api/v2/export/` returns them **nested inside their book** | a **local highlight index** is required (F7), fed from the v2 export because it is dramatically cheaper (R3) |
 | Save / archive | `POST /api/v1/links`, dedup by sniffing an "already exists" error string | `POST /api/v3/save/` → **`201` created / `200` already existed**, both return `{ id, url }` | dedup becomes reliable; the fragile string match and the follow-up search are **deleted** |
 | Collections | `GET /api/v1/collections` → dropdown | `GET /api/v3/tags/` → `{ key, name }` | direct parity: the collection dropdown becomes a **tag** picker |
-| Highlight order | `startOffset` | no offset field on highlight documents | sort by `created_at`, then `id` |
-| Highlight colour | `highlight.color` | **not exposed anywhere in the Reader API** | the colour→callout map becomes a *tag*→callout map, or is fed from the Readwise v2 export (R3b) |
+| Highlight order | `startOffset` | v3 highlight documents have no offset; the v2 export carries `location` + `highlighted_at` | sort by `location`, then `highlighted_at` — real reading order, another reason for R3 |
+| Highlight colour | `highlight.color` | not exposed in the Reader v3 API at all | **colour is driven by tags** instead: an ordered tag→colour map in settings, with a default colour for anything unmatched (R6) |
 | Rate limits | none notable | **per endpoint**: 20/min for reads, 50/min for save/update; `429` + `Retry-After` | a client-side throttle with two buckets is mandatory (R5) |
 | Types | official OpenAPI spec → generated `schema.ts` + drift test | **no published OpenAPI spec** | hand-written models + fixture contract tests (R9); `npm run gen:api` and the drift test are **deleted** |
 
@@ -67,7 +67,7 @@ Rate limits are **per endpoint, per access token**; `429` carries `Retry-After`
 | Update a document | `PATCH /v3/update/<id>/` | 50/min | F8 (optional) |
 | Bulk update | `PATCH /v3/bulk_update/` — ≤ 50 items, `200` all ok / `207` partial / `400` bad payload | 20/min | F8 (optional) |
 | Delete | `DELETE /v3/delete/<id>/` → 204 | 20/min | not used (see R11) |
-| _(alternative highlight source, R3b)_ | `GET /v2/export/?updatedAfter=&pageCursor=` — books with `highlights[]` incl. `text`, `note`, **`color`**, `location`, `highlighted_at` | 20/min | optional colour enrichment |
+| **Highlights (primary source, R3)** | `GET /v2/export/?updatedAfter=&pageCursor=` → `{ count, nextPageCursor, results: [ book ] }`, each book carrying `user_book_id`, `title`, `author`, `source`, `source_url`, `unique_url`, `book_tags[]`, `category`, and **all** of its `highlights[]` — each with `id`, `text`, `note`, `color`, `location`, `highlighted_at`, `updated_at`, `tags[]` | 20/min | F7 sync, F2, F4 |
 
 `limit` is 1–100, **default 100** — so a 5 000-document library is 50 requests,
 ≈ 2½ minutes at 20/min. That is the honest first-sync cost.
@@ -158,12 +158,13 @@ search and per-parent endpoints.
   parsed (code fences, inline code, wikilinks and image embeds masked out first)
   — `src/core/links.ts` ports **verbatim**.
 - Highlights come from the **local index** (F7), grouped per source document,
-  each with its attached note (its `category=note` child) rendered as the
-  comment.
+  each with its `note` rendered as the comment and a colour bar driven by the
+  tag→colour map (R6).
 - The parent document's own top-level `notes` field is shown once at the top of
   the group — Reader has a document-level note that Linkwarden had no analogue
   for, and it is free to display.
-- Sorted within a source by `created_at`, then `id` (R8).
+- Sorted within a source by `location`, then `highlighted_at` (R8) — genuine
+  reading order, which the v3 highlight documents could not have given.
 - "Refresh" runs a delta sync and re-renders; the panel otherwise works fully
   offline from the persisted index.
 
@@ -199,12 +200,20 @@ search and per-parent endpoints.
 - **Duplicate protection (mandatory):** before inserting, scan the note for an
   existing `^rw-<id>`. Because ids are variable-length (R10), the boundary guard
   `(?![0-9a-zA-Z])` is load-bearing, not decoration.
-- **Semantics map (R6):** the Reader API exposes no highlight colour, so the
-  Linkwarden colour→callout/tag map becomes a **tag→callout/tag** map keyed on
-  the parent document's Reader tags, with a `*` default rule. Same settings UX
-  (rows of `key → callout + tag`, add/remove), same `mergeSettings` deep-merge so
-  new default keys survive an upgrade — and now the key dropdown can be populated
-  from `GET /v3/tags/` instead of typed blind.
+- **Tag → colour map (R6):** colour is derived from **tags**, not from the API.
+  The user configures, in plugin settings, which tags mean which colour; anything
+  that matches no rule gets the **default colour**. Each rule is
+  `tag → { color, callout, tag? }`, so one setting drives both the panel's colour
+  bar (F2) and the callout type used on insert (F4) — the same shape and the same
+  settings UX as Linkwarden's colour map, just keyed differently.
+  - **Rules are an ordered list, first match wins.** A highlight can carry
+    several tags, so an unordered map would make the outcome depend on object key
+    order. The settings UI must let rows be reordered.
+  - **Key source:** a highlight's own `tags[]` first, falling back to its book's
+    `book_tags[]`. Both arrive in the same v2 export payload, so this costs
+    nothing and removes what was an open question about where tags live.
+  - Rule keys are offered from `GET /v3/tags/` so they are picked, not typed
+    blind; free entry stays allowed.
 
 ### F5 — Re-link command
 - Re-bind the source under the cursor via the F1 picker; only the href is
@@ -219,39 +228,85 @@ search and per-parent endpoints.
   same index, no extra API surface.
 
 ### F7 — Local index + sync engine _(new; forced by the API)_
-The Reader API has no search and no per-parent highlight endpoint, so the plugin
-maintains its own index. This is the single largest new component and the only
-part with no counterpart in the Linkwarden plugin.
+Neither API has search or a per-parent highlight endpoint, so the plugin
+maintains its own index. This is the largest new component and the only part with
+no counterpart in the Linkwarden plugin. **The design goal is the lowest possible
+request count**, because every request is 1/20th of a minute's budget and the
+first sync happens immediately after the user pastes their token.
 
-- **Shape** (persisted in `data.json` next to settings):
-  ```ts
-  interface Index {
-    docs: Record<DocId, IndexedDoc>;        // category != highlight | note
-    highlightsByParent: Record<DocId, IndexedHighlight[]>;
-    noteByHighlight: Record<DocId, string>; // category=note, keyed by parent_id
-    tags: Array<{ key: string; name: string }>;
-    cursors: { docsUpdatedAfter?: string; highlightsUpdatedAfter?: string };
-    syncedAt?: number;
-  }
-  ```
-- **Only the fields the UI needs are stored** — `id`, `url`, `source_url`,
-  `title`, `author`, `site_name`, `category`, `location`, `tags`, `notes`,
-  `updated_at` (~200 bytes/doc; 5 000 documents ≈ 1 MB of `data.json`).
-  `withHtmlContent` and `withRawSourceUrl` stay **off**: both are documented to
-  slow the request, and neither is needed.
-- **First sync:** a full paged pull (`limit=100`, follow `nextPageCursor`) of
-  documents, then of `category=highlight`, then `category=note`, throttled to
-  20/min, with a progress notice and a cancel. Triggered on first successful
-  token entry, not on install.
-- **Delta sync:** `updatedAfter` = the last sync timestamp, run on plugin load,
-  on the panel's refresh button, and optionally on an interval. Note that
-  `updatedAfter` does **not** report deletions, so settings carry a "rebuild
-  index" button that does a full re-pull.
-- **Bounded scope setting:** index only chosen `location`s (default: everything
-  except `feed`, which is typically the largest and least note-worthy bucket).
+#### Two sources, cleanly split
+
+| Source | Endpoint | Gives |
+| --- | --- | --- |
+| Highlights | `GET /v2/export/` | every highlighted source with **all** its highlights nested: `text`, `note`, `color`, `location`, `highlighted_at`, `tags[]`, plus the book's `title`, `author`, `source_url`, `unique_url`, `book_tags[]` |
+| Documents | `GET /v3/list/` | the rest of the Reader library, for picking sources you have not highlighted and for F3 |
+
+Reader v3's own `category=highlight` / `category=note` streams are **not used at
+all**. They cost one request per ~100 highlights, carry no colour, no note in the
+same object, and no sort key — and the field holding the highlighted text is not
+even documented. The v2 export returns highlights grouped per book, so a library
+of 20 000 highlights across 400 sources costs a number of requests proportional
+to the *books*, not the highlights. That is the single biggest lever on sync
+cost, and it also happens to be the richer payload.
+
+#### Tiered sync (R12) — the low-request-count design
+
+**Tier 1, the default: the export alone.** `GET /v2/export/` is enough to power
+the panel *and* a picker over every source you have ever highlighted, because
+each book carries its own title, author and `unique_url`. For most users this is
+a handful of requests and the plugin is fully usable within seconds.
+
+**Tier 2, opt-in: the full document index.** `GET /v3/list/` paged at
+`limit=100`, so the picker also covers documents you have saved but not
+highlighted, and F3 can tell "already in Reader" from "new". This is the
+expensive tier (one request per 100 documents, and RSS-heavy libraries are
+large), so it is off by default, scoped by `location` (never `feed` by default),
+and clearly labelled with what it costs.
+
+**Delta sync** for both: `updatedAfter` = the last successful sync, run on plugin
+load, on the panel's refresh button, and optionally on an interval. Steady-state
+cost is one or two requests. Concurrent syncs coalesce; repeated "Sync now"
+clicks cannot pile up.
+
+**Deletions are not reported by `updatedAfter`** in either API, so settings carry
+a "rebuild index" button that does a full re-pull. It is the only correctness
+backstop against a highlight deleted in Readwise lingering in the panel.
+
+#### Shape (persisted outside `data.json` — see below)
+
+```ts
+interface Index {
+  /** Bindable sources, from the export (tier 1) and the list (tier 2). */
+  docs: Record<DocId, IndexedDoc>;
+  highlightsByParent: Record<DocId, IndexedHighlight[]>;
+  /** Books the export returned that could not be joined to a Reader id. */
+  unjoined: UnjoinedBook[];
+  tags: Array<{ key: string; name: string }>;
+  cursors: { exportUpdatedAfter?: string; docsUpdatedAfter?: string };
+  /** Distinguishes "no highlights" from "not synced yet". */
+  highlightsSyncedAt?: number;
+  tier2SyncedAt?: number;
+}
+```
+
+- **Only the fields the UI needs are stored** (~200 bytes/doc). `withHtmlContent`
+  and `withRawSourceUrl` are never requested — both are documented to slow the
+  request and neither is needed.
+- **The join:** an exported book maps to a Reader document by `unique_url`
+  (expected to be the `read.readwise.io` URL), falling back to matching
+  `source_url` against the tier-2 index. Books that join to nothing — Kindle,
+  podcasts, manually added highlights — are kept in `unjoined` and simply never
+  bind. They are not an error.
+- **Not persisted in `data.json`.** The index goes in its own file in the plugin
+  folder, written debounced. `data.json` is parsed synchronously on plugin load
+  and rewritten whole on every save; a library-sized blob there is a startup
+  stall and a vault-sync conflict generator.
+- **The index is derived state.** Nothing user-authored lives in it, so the
+  recovery for any corruption, schema change or failed migration is "rebuild".
+  Every decision that keeps this true is worth defending.
 - **Offline:** the index is the source of truth for the UI; the network is only
-  ever needed to refresh it. The panel therefore works offline by construction,
-  replacing Linkwarden's per-source TTL cache (`core/cache.ts` is superseded).
+  ever needed to refresh it. The panel works offline by construction, replacing
+  Linkwarden's per-source TTL cache.
 
 ### F8 — Write back to Reader _(optional, post-1.0)_
 Reader, unlike Linkwarden, has real write endpoints. Kept out of the first
@@ -289,8 +344,15 @@ oversight.
 - **Default save location** — `new` / `later` / `archive` / `feed`
   (replaces "default collection"; no `shortlist` — the API rejects it).
 - **Default save tags** — picked from `GET /v3/tags/`, free entry allowed.
-- **Tag → callout/tag map** — for F4 (R6), keys offered from the tag list.
-- **Index scope** — which `location`s to index (default: all but `feed`).
+- **Tag → colour map** — the ordered rule list from R6: each row is
+  `tag → colour + callout (+ optional Obsidian tag)`, reorderable, with keys
+  offered from `GET /v3/tags/`. Drives both the panel colour bar and F4's
+  callout type.
+- **Default colour** — used for any highlight matching no rule. Ships as
+  yellow / `[!quote]`, matching Readwise's own default highlight.
+- **Index scope** — whether to build the tier-2 document index at all, and if so
+  which `location`s (default: off; when enabled, all but `feed`). The setting
+  states the request cost in plain words.
 - **Sync** — "Sync now" and "Rebuild index" buttons, last-synced timestamp,
   optional auto-sync interval.
 - _No base URL, no deep-link target, no cache TTL, no collection._
@@ -340,34 +402,34 @@ oversight.
 - **R2 — Setup:** ✅ token only. No base URL in the UI; a non-user-facing
   `apiBase` default exists solely so the example vault can point at the mock
   server.
-- **R3 — Highlight source:** ⚠️ **the one real fork.**
-  - **R3a (recommended, default):** Reader v3 only —
-    `GET /v3/list/?category=highlight` + `category=note`, joined by `parent_id`.
-    One API, ids that join natively to the binding, covers documents that never
-    left Reader. Costs a full first sync; no colour, no offsets.
-  - **R3b (optional enrichment, later):** Readwise v2
-    `GET /v2/export/?updatedAfter=` — books with `highlights[]` carrying `text`,
-    `note`, **`color`**, `location`, `highlighted_at`, joined to Reader documents
-    via the book's `unique_url`. Restores colour semantics and gives a usable
-    sort key, at the cost of a second API surface and a URL-based join.
-  - **Decision:** define a `HighlightSource` interface, ship R3a, keep R3b as a
-    settings-gated "use Readwise highlight colours" enrichment.
+- **R3 — Highlight source:** ✅ **settled: `GET /v2/export/` is primary.** It
+  wins on every axis that matters — requests proportional to *books* rather than
+  to highlights (the dominant term in first-sync cost), a documented `text`
+  field, `note` in the same object, `location` + `highlighted_at` for real
+  reading order, and per-highlight `tags` that R6 needs. Reader v3's
+  `category=highlight` / `category=note` streams are not used. The cost is a
+  second API surface and a URL-based join, both accepted. Same token for both.
 - **R4 — Index & sync:** ✅ persisted local index with `updatedAfter` deltas
   (F7), `limit=100` paging, explicit rebuild for deletions. Supersedes
   Linkwarden's per-source TTL cache.
 - **R5 — Rate limiting:** ✅ two pure token buckets (20/min reads, 50/min
   writes) + `Retry-After` handling, driven by every batch path.
-- **R6 — Highlight semantics:** ✅ **settled by the docs** — the Reader API
-  exposes no colour on any document, so F4 uses a **tag→callout/tag map** keyed
-  on the parent document's tags, with keys offered from `GET /v3/tags/`. Becomes
-  a colour map only if R3b is enabled.
+- **R6 — Colour semantics:** ✅ **colour comes from tags.** The user configures
+  an ordered list of rules mapping a tag to a colour (and the callout type used
+  on insert); the first rule whose tag the highlight carries wins; anything
+  unmatched gets the configurable **default colour**. Keys are read from the
+  highlight's own `tags[]`, falling back to its book's `book_tags[]`. The v2
+  export also returns Readwise's native `color`, which this design deliberately
+  **ignores** — one mechanism, under the user's control, rather than two that
+  can disagree.
 - **R7 — Dedup on save:** ✅ server-side and free — `201` vs `200` from
   `/v3/save/`, both returning the id. Linkwarden's D5 machinery is deleted.
-- **R8 — Highlight order:** ✅ `created_at` then `id`; no `startOffset` exists.
-  Document the limitation in the README (creation order, which normally equals
-  reading order).
+- **R8 — Highlight order:** ✅ `location` then `highlighted_at`, both from the
+  v2 export — genuine reading order, and one of the reasons R3 went the way it
+  did.
 - **R9 — API types:** ✅ hand-written `src/api/models.ts` (no OpenAPI upstream),
-  validated by **fixture contract tests** against redacted real responses in
+  covering both the v3 document shape and the v2 export shape, validated by
+  **fixture contract tests** against redacted real responses in
   `tests/fixtures/`. `npm run gen:api`, `openapi/`, and
   `tests/openapi-drift.test.ts` are dropped; `docs/api-notes.md` records the
   verified endpoint surface and the date it was verified (2026-09-01).
@@ -381,29 +443,42 @@ oversight.
   `DELETE /v3/delete/` is never called. This preserves Linkwarden's D4 property —
   a near-zero conflict surface — while leaving the door open, and it keeps the
   plugin's blast radius small given an unscoped account token.
+- **R12 — Tiered sync:** ✅ the export alone is the default and is enough for the
+  panel and for picking any source you have highlighted; the full v3 document
+  index is opt-in, off by default, and labelled with its cost. Lowest request
+  count for the common case, with the expensive tier available to whoever wants
+  it.
 
 ## Open questions to verify against a live account
 
-The official docs (pasted 2026-09-01) resolved most of the original list:
-page size (`limit`, 1–100, default 100), per-endpoint rate limits, `tag`
-singular, `GET /v2/auth/` → 204, and — verbatim — that a note's `parent_id` is
-its **highlight**, not the article. What remains:
+The official docs (2026-09-01) settled page size (`limit`, 1–100, default 100),
+per-endpoint rate limits, `tag` singular, `GET /v2/auth/` → 204, and — verbatim —
+that a note's `parent_id` is its **highlight**, not the article. Choosing the v2
+export as the highlight source (R3) settled two more: the highlighted text is the
+documented `text` field, and per-highlight `tags` arrive in the same payload,
+so R6 no longer depends on an unknown.
 
-1. **Which field carries a highlight document's text.** The docs' example
-   response only shows article/RSS documents, and no field in the documented
-   list is the highlighted text. Third-party clients type it as `content`.
-   This is the **only blocking unknown** — F2 cannot render without it. One
-   `GET /v3/list/?category=highlight&limit=1` answers it.
-2. **What a note document looks like** — presumably the same field as (1).
-3. **Whether the location-free `https://read.readwise.io/read/<id>` resolves.**
-   If not, insert the `/new/read/<id>` form; the permissive parser (R10) makes
-   the plugin correct either way, so this only affects which string is written
-   into notes.
-4. **Whether `tags` on a highlight document are its own or inherited** from the
-   parent, which decides whether F4's map keys off the highlight or the parent
-   (the spec currently assumes the parent).
-5. **Whether Reader-saved documents appear in `/v2/export/`** with
-   `unique_url` = the `read.readwise.io` URL — only needed if R3b is taken.
+What remains, in order of what rides on it:
+
+1. **Does `unique_url` on an exported book give the Reader document id?** This is
+   now the load-bearing unknown: it is what joins a highlight to its binding. The
+   `source_url` fallback covers the case where it does not, but only for
+   documents the tier-2 index has seen — so if `unique_url` is not the
+   `read.readwise.io` URL, tier 1 alone stops being sufficient and R12's default
+   changes. One `GET /v2/export/?ids=<a Reader book>` answers it.
+2. **How many requests does a real export actually take?** The v2 export's page
+   size is not documented — it paginates by `nextPageCursor` over books. The
+   whole R3/R12 argument rests on this being much cheaper than paging highlights
+   individually; measure it rather than assume it.
+3. **Do all Reader highlights reach the Readwise library, and how quickly?** The
+   export is a Readwise-side view. If a fresh Reader highlight takes minutes to
+   appear there, the panel's "refresh" needs to say so rather than look broken.
+4. **Whether the location-free `https://read.readwise.io/read/<id>` resolves.**
+   Only affects which string is written into notes; the permissive parser (R10)
+   keeps the plugin correct either way.
+5. **Whether Readwise normalizes URLs on save** (trailing slash, `www`, tracking
+   parameters), which decides whether F3 needs to strip tracking parameters
+   before saving to avoid duplicate documents.
 
 Record the answers in `docs/api-notes.md` and capture redacted responses into
 `tests/fixtures/` as they are confirmed (R9).

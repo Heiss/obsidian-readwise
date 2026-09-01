@@ -1,7 +1,11 @@
 # Red team — where this plan breaks
 
 _Companion to [spec.md](spec.md) and [plan.md](plan.md). Written 2026-09-01,
-after the official Reader API docs were checked in._
+after the official Reader API docs were checked in; **revised the same day** once
+two decisions landed — colour comes from user-configured tags (R6), and
+highlights come from the Readwise v2 export (R3/R12). A1 and A2 below are the
+findings those decisions retire; they are kept, struck through, because the
+reasoning is why the design looks the way it does._
 
 Nothing here is a reason not to build the plugin. It is the list of things that,
 left unexamined, turn into a half-finished port with a slow startup and a panel
@@ -11,7 +15,7 @@ the user quietly stops trusting. Ordered by what it costs to be wrong.
 
 ## 1. Assumptions that can sink the project
 
-### A1 — That highlight text is retrievable in bulk from the Reader API 🔴 blocking
+### A1 — That highlight text is retrievable in bulk from the Reader API ✅ retired by R3
 
 **The assumption.** `GET /v3/list/?category=highlight` returns the highlighted
 text in a field (third-party clients say `content`).
@@ -25,11 +29,16 @@ The field is simply not documented.
 plugin becomes a Readwise-v2-export client wearing a Reader badge. Every
 milestone from M2 onward changes.
 
-**What the plan gets wrong:** it verifies this in M1. That is one milestone too
-late. **This must be answered before M0 is started** — it is one request with one
-token, and it decides the architecture.
+**Resolution.** The design no longer depends on it. `GET /v2/export/` returns a
+documented `text` field per highlight, so the undocumented v3 field is simply not
+used. The finding did its job: it forced the question early enough that the
+answer could still change the architecture, and it did.
 
-### A2 — That the first sync is fast enough to hide behind a progress bar 🔴 contradicts the headline UX
+**What survives:** the general lesson that an undocumented field discovered from
+third-party clients is not a foundation. The remaining unknown of the same kind
+is now the `unique_url` join (§6.1) — verify it before M0, for the same reason.
+
+### A2 — That the first sync is fast enough to hide behind a progress bar ✅ addressed by R3 + R12
 
 **The assumption.** A full index costs ~50 requests ≈ 2½ minutes.
 
@@ -42,20 +51,22 @@ token — precisely the moment the product promises "ready to go".
 **This is the single biggest threat to the stated UX goal.** The Linkwarden
 plugin never had it, because it fetched one source's highlights on demand.
 
-**Options, in order of preference:**
+**Resolution (R3 + R12).** Option 2 was taken, and it turned out to dominate:
+`GET /v2/export/` returns highlights **nested inside their book**, so cost scales
+with the number of *sources you have highlighted* rather than with the number of
+highlights or the size of the library. The v3 per-100-documents index — the
+expensive part — became **tier 2, opt-in and off by default**, because the export
+alone already covers the panel and a picker over every highlighted source.
 
-1. **Split the sync.** Documents first (picker works in ~1 minute), highlights in
-   the background afterwards. The user gets F1 immediately and F2 fills in.
-2. **Reconsider R3b as the *primary* highlight source, for economics rather than
-   colour.** `GET /v2/export/` returns highlights **nested inside their book**,
-   so one request carries a whole document's highlights instead of one per
-   highlight page. For a heavy highlighter this is plausibly an order of
-   magnitude fewer requests — and it also happens to restore `color`,
-   `highlighted_at` and a real sort key. The cost is a URL-based join and a
-   second API surface. _This deserves a measurement in M1, not a guess: pull page
-   one of each and compare request counts for the same library._
-3. **Scope the default index harder** — `feed` excluded is in the plan; consider
-   also defaulting to "documents you have highlighted" if that is expressible.
+**What is still owed:** a *measurement*, not a belief. The v2 export's page size
+is undocumented, and the whole argument rests on it. M-1 measures it, and
+`sync.test.ts` asserts on the request count so the property cannot silently
+regress. If the export turns out to page tightly, the finding above comes back.
+
+**What survives regardless:** the underlying error was doing the arithmetic for a
+5 000-document library and not for a 50 000-document one. Any future feature that
+adds a per-item request should be costed against the large library, not the
+convenient one.
 
 ### A3 — That the index can live in `data.json` 🟠 startup and sync damage
 
@@ -99,18 +110,18 @@ the moment anything user-authored lands in the index, that changes.
 
 ### A5 — That `updatedAfter` deltas see everything 🟠 silent staleness
 
-The plan syncs highlights by `updatedAfter`. That is correct only if a
-highlight's `updated_at` moves whenever anything the panel displays changes —
-including when a **note child** is added or edited, which is a *different*
-document. If a note is created without touching its parent highlight's
-`updated_at`, delta syncs will show the highlight without the note, indefinitely,
-with no error.
+Partly eased by R3: in the v2 export a highlight's `note` is a **field on the
+highlight**, not a separate document with its own lifecycle, so the worst version
+of this — a note that never appears because nothing touched its parent — is gone.
+What remains is the book-level question: does a book's export entry come back
+under `updatedAfter` when one of its highlights changes? If not, edits go
+missing silently.
 
 For a "living reading aid", **silently stale is worse than visibly broken** — the
 user stops trusting the panel and cannot say why.
 
-- Sync `category=note` with its own independent cursor (the plan does this —
-  keep it, and make sure the two cursors are never collapsed into one).
+- Keep the export cursor independent of the tier-2 document cursor; never
+  collapse them into one.
 - Deletions are not reported by `updatedAfter` at all. A highlight deleted in
   Reader stays in the panel forever until a rebuild. The "rebuild index" button
   is therefore not a nicety, it is the only correctness backstop — surface it,
@@ -129,12 +140,22 @@ watermark, and a cancel/resume-safe cursor persisted *with* the index. The test
 plan mentions "cancel mid-run" and "resume after failure"; the data structure it
 would test does not exist yet.
 
-### A7 — That the `parent_id` chain is always article ← highlight ← note 🟡
+### A7 — That every exported book joins to a Reader document 🟠 reshaped by R3
 
-Orphans are not handled anywhere in the plan: a highlight whose parent was
-deleted, a note whose highlight was deleted, or a `read.readwise.io` link in the
-user's note pointing at a document that isn't theirs (copied from a colleague).
-Each needs a defined rendering. Today each is an undefined lookup miss.
+The `parent_id` chain is no longer used, but the same class of problem moved to
+the join. `GET /v2/export/` returns the **whole Readwise library** — Kindle,
+podcasts, tweets, manually added highlights — not just Reader. Most of it has no
+Reader document and therefore nothing to bind to.
+
+That is not an error and must not be rendered as one: unjoinable books go to
+`unjoined` and are ignored. But two neighbouring cases still need defined
+behaviour, and did not have it: a `read.readwise.io` link in the user's note
+pointing at a document that is not theirs (copied from a colleague), and a book
+whose join succeeds only via `source_url`, which is fuzzier than an id and can
+therefore join *wrongly*. A wrong join shows someone's highlights under the wrong
+source — quiet, plausible, and worse than showing none. Prefer `unique_url`;
+treat a `source_url` match as provisional and never let it overwrite an id
+match.
 
 ### A8 — That URL dedup on save is good enough 🟡
 
@@ -204,7 +225,7 @@ Minor but real: this repo copies substantial code from obsidian-linkwarden. Same
 author, same MIT license, so there is no license problem — but the README should
 say it is a port, both as attribution and because it explains the architecture.
 
-### A12 — The mock server can become a self-consistent fiction 🟡
+### A11b — The mock server can become a self-consistent fiction 🟡
 
 Every test and every manual run goes through `example-vault/mock-readwise`. If
 the mock's idea of a highlight document is wrong (see A1), the whole suite passes
@@ -238,48 +259,65 @@ correcting a fixture corrects the mock automatically.
 
 ## 6. What is genuinely still unclear
 
-Ranked by how much rides on the answer.
+Ranked by how much rides on the answer. Choosing the v2 export (R3) retired the
+old top item — the undocumented highlight-text field — and replaced it with the
+join.
 
-1. **Which field carries highlight text** (A1) — blocking, one request to settle.
-2. **Whether v2 export beats v3 list on sync economics** (A2) — decides the
-   primary highlight source; needs a measurement, not an opinion.
-3. **Where the index lives** — synced `data.json`, or a separate device-local
-   file (A3). Decide before M2.
-4. **Whether the location-free `read.readwise.io/read/<id>` URL resolves** — only
-   affects which string is written into notes; the permissive parser (R10) makes
+1. **Does an exported book's `unique_url` carry the Reader document id?** This is
+   now the load-bearing unknown: it is the only clean way to attach a highlight
+   to its binding. `source_url` is the designed fallback, but it only works for
+   documents the opt-in tier-2 index has seen — so if `unique_url` is not the
+   `read.readwise.io` URL, tier 2 stops being optional and R12's default
+   changes. One request settles it.
+2. **How many requests does a real `/v2/export/` actually take?** Its page size
+   is undocumented. The entire cost argument for R3/R12 rests on this being much
+   cheaper than paging highlights individually. Measure it; do not believe it.
+3. **Do all Reader highlights reach the Readwise library, and how fast?** The
+   export is a Readwise-side view of Reader's data. A lag means the panel looks
+   broken immediately after the user highlights something — the exact moment they
+   are most likely to look at it.
+4. **Do highlights carry their own `tags`, or only their book's?** R6 reads the
+   highlight's tags first and falls back to `book_tags`, so it works either way —
+   but if per-highlight tags are rare in practice, "tag → colour" degrades to
+   "source → colour", which is a coarser feature than it sounds and should be
+   said out loud in the README.
+5. **Whether the location-free `read.readwise.io/read/<id>` URL resolves** — only
+   affects which string is written into notes; the permissive parser (R10) keeps
    the plugin correct either way.
-5. **Whether a highlight's `tags` are its own or inherited from its parent** —
-   decides whether F4's semantics map keys off the highlight or the document.
 6. **Whether Readwise normalizes URLs on save** (A8).
-7. **Whether Reader documents appear in `/v2/export/` with a joinable
-   `unique_url`** — only if R3b is taken; but see (2), which may promote it.
-8. **What "Refresh" in the panel means** when there is no per-source fetch. A
-   full delta sync behind one button press is a surprising amount of work for a
-   click; scoping it to "the bound documents in this note" is impossible via the
-   API. Unresolved UX, not just unresolved code.
-9. **Mobile.** `isDesktopOnly: false` is inherited, unexamined. First sync, index
-   size and SecretStorage availability on iOS/Android are all unknown.
-10. **German i18n for the new sync vocabulary** — no glossary decided; upstream's
-    key-parity test will fail loudly, which is the right kind of unclear.
-
----
+7. **What "Refresh" in the panel means** when there is no per-source fetch. Under
+   R3 this is much better than it was — a delta export is one or two requests, so
+   the button is cheap — but it is still "sync everything" wearing the label
+   "refresh this note".
+8. **Mobile.** `isDesktopOnly: false` is inherited, unexamined. R3 helps here too
+   (a small index and a cheap sync), but SecretStorage availability on iOS and
+   Android is still unknown.
+9. **German i18n for the new sync and colour-rule vocabulary** — no glossary
+   decided; upstream's key-parity test will fail loudly, which is the right kind
+   of unclear.
 
 ## 7. Changes to the plan this analysis forces
 
-1. **Add M-1, a verification spike, before M0.** One token, ~10 requests, half a
-   day: settle §6 items 1, 2, 4, 5, 6, and record them in `docs/api-notes.md` +
-   `tests/fixtures/`. Everything downstream is cheaper afterwards, and one of the
-   answers can still change the architecture.
-2. **Re-sequence M2/M3 so the picker ships on a documents-only index.** Highlights
-   sync in the background. This removes the long unrewarding middle of the plan
-   *and* fixes the onboarding cliff in A2.
+1. **Add M-1, a verification spike, before M0.** One token, a handful of
+   requests, half a day: settle §6 items 1–6 and record them in
+   `docs/api-notes.md` + `tests/fixtures/`. Item 1 can still change the
+   architecture, which is the whole point of doing it first.
+2. ~~Re-sequence M2/M3 so the picker ships on a documents-only index.~~
+   **Superseded by R3/R12**, which is strictly better: the export alone powers
+   both the panel *and* a picker over every highlighted source, so M2 is one
+   cheap sync and M3 ships both surfaces. The expensive document index became
+   its own late, optional milestone instead of a prerequisite.
 3. **Move the index out of `data.json`**, debounce its writes, and decide the
    sync-or-not question explicitly (A3).
 4. **Add a highlight-sync watermark and a persisted resume cursor to the index
    shape** (A6), before writing `sync.ts`.
 5. **Do not port the settings-tab compatibility shim**; raise `minAppVersion` to
    1.13 instead (A10).
-6. **Derive the mock server from the fixtures** (A12).
-7. **Add a README section on the three honest limitations**: bindings are private
+6. **Derive the mock server from the fixtures** (A11b).
+7. **Assert on the request count in `sync.test.ts`.** "Few requests" is now a
+   design property, not an implementation detail, and untested properties decay.
+8. **Prefer the `unique_url` join and treat a `source_url` match as
+   provisional** (A7) — a wrong join is quieter and worse than a missing one.
+9. **Add a README section on the three honest limitations**: bindings are private
    links (A9), the token is unscoped (§5), and highlights appear in creation
    order because the API exposes no offsets (R8).

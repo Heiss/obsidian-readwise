@@ -4,9 +4,11 @@ Companion to [spec.md](spec.md) and [red-team.md](red-team.md). The spec says
 *what* and *why*, the red team says *where it breaks*; this file says *in what
 order*, *from which file*, and *how it is tested*.
 
-Revised 2026-09-01 after the official Reader API docs and the red-team pass:
-the verification spike moved ahead of all coding, the picker now ships before
-the highlight sync, and the index moved out of `data.json`.
+Revised 2026-09-01 after the official Reader API docs, the red-team pass, and
+two decisions: **colour comes from user-configured tags** (R6) and **highlights
+come from the Readwise v2 export** because it costs requests proportional to
+books rather than to highlights (R3/R12). The verification spike moved ahead of
+all coding, and the index moved out of `data.json`.
 
 Starting point: this repository is empty. The plan is a **port** of
 [Heiss/obsidian-linkwarden](https://github.com/Heiss/obsidian-linkwarden)
@@ -44,12 +46,12 @@ counterpart upstream.
 | `quote.ts` | adapt | id type `number` → `string`; block-id prefix `lw-` → `rw-`; `hasBlockId` keeps a real right-boundary guard `(?![0-9a-zA-Z])` — ids are **not** fixed-length, so prefix collisions stay possible; blank-line separator logic unchanged |
 | `secretId.ts` | verbatim | branded `SecretName` / `TokenValue`; constant → `readwise-token` |
 | `urls.ts` | **adapt (rewrite)** | `buildDeepLink(id)` → the canonical, location-free `https://read.readwise.io/read/<id>`; `parseBindingId(href)` is **permissive** — optional `new\|later\|shortlist\|archive\|feed` path segment, either `read.readwise.io` or `readwise.io` host, **variable-length** id, tolerant of query/fragment/trailing slash (R10). The three-target `DeepLinkTarget` union is deleted |
-| `colorMap.ts` | adapt | becomes `semanticsMap.ts`: tag → `{ callout, tag? }`, plus a `*` default rule (R6 — the Reader API exposes no highlight colour) |
+| `colorMap.ts` | adapt → `colorRules.ts` | becomes an **ordered rule list**, not a map: `tag → { color, callout, tag? }`, first match wins, plus a configurable default rule for unmatched highlights (R6). Ordering is the substantive change from upstream — a highlight carries several tags, so an object-keyed map would make the result depend on key order. `resolveColor(rules, highlightTags, bookTags)` |
 | `cache.ts` | **deleted** | superseded by the index (F7) |
 | `persistence.ts` | **new** | the index does **not** live in `data.json` (red team A3): separate file in the plugin folder, debounced writes, settings stay in `data.json`. Loading the whole library synchronously on plugin start is a startup stall and a review objection |
 | `rateLimit.ts` | **new** | token bucket, injectable `now()`, `acquire()` returning a delay; **two** buckets — 20/min for `list`/`tags`/`bulk_update`, 50/min for `save`/`update`. Budgets deliberately *below* the published limits: the token is shared with whatever else the user runs against Readwise |
-| `index.ts` | **new** | the persisted index: shape, merge-a-page, group-by-`parent_id`, attach notes to highlights, fuzzy search over docs, sort. Carries a **highlight-sync watermark** and a **resume cursor** so "no highlights" and "not synced yet" are distinguishable (red team A6), and defined handling for orphans — a highlight whose parent is gone, a binding to a document that is not the user's (A7) |
-| `sync.ts` | **new** | pure sync driver: given a "fetch page" function and a cursor, produce the sequence of requests and the resulting index mutations. Pure so the whole sync is unit-testable with a fake clock and fake pages. Independent cursors for documents / highlights / notes — never collapsed into one (A5). Coalesces concurrent runs |
+| `index.ts` | **new** | the persisted index: shape, merge an export page, **join a book to a Reader document id** (`unique_url` first, `source_url` against the tier-2 index as fallback, `unjoined` otherwise), fuzzy search over docs, sort by `location` then `highlighted_at`. Carries the **sync watermarks** and **resume cursors** so "no highlights" and "not synced yet" are distinguishable (red team A6), and defined handling for a binding to a document that is not the user's (A7) |
+| `sync.ts` | **new** | pure sync driver: given a "fetch page" function and a cursor, produce the sequence of requests and the resulting index mutations. Pure so the whole sync is unit-testable with a fake clock and fake pages. **Two tiers** (R12): the v2 export alone by default, the v3 document index opt-in. Independent cursors per tier, never collapsed into one (A5). Coalesces concurrent runs, and counts its own requests so the UI can show the cost |
 
 ### `src/api/`
 
@@ -57,8 +59,8 @@ counterpart upstream.
 | --- | --- | --- |
 | `http.ts` | **verbatim** | the `HttpClient` contract (resolve on any status, reject only on transport failure) is exactly what the 200-vs-201 and 429 paths need |
 | `schema.ts` (generated) | **deleted** | no upstream OpenAPI (R9) |
-| `models.ts` | **adapt (rewrite)** | hand-written `ReaderDocument`, `Highlight`, `SaveDocumentBody`, `ListResponse<T>`; required-field narrowing kept in the same style |
-| `client.ts` | adapt | same shape, new calls: `checkConnection()` (`GET /v2/auth/` → 204), `listDocuments({ id, category, location, tag, updatedAfter, limit, pageCursor })`, `listTags()` (`GET /v3/tags/` — the direct replacement for `getCollections()`), `save(body)` returning `{ document, alreadyExisted }` from the 201/200 split. Wrapped by the rate limiter. **No `delete()` method is written at all** (R11): the restraint is enforced by absence, not by discipline. `search()`, `recent()` and `createLink()`'s duplicate machinery are gone |
+| `models.ts` | **adapt (rewrite)** | hand-written `ReaderDocument`, `SaveDocumentBody`, `ListResponse<T>` for v3, plus `ExportedBook` / `ExportedHighlight` for v2; required-field narrowing kept in the same style |
+| `client.ts` | adapt | same shape, new calls: `checkConnection()` (`GET /v2/auth/` → 204), **`exportHighlights({ updatedAfter, pageCursor })`** (`GET /v2/export/` — the primary highlight source, R3), `listDocuments({ id, category, location, tag, updatedAfter, limit, pageCursor })`, `listTags()` (`GET /v3/tags/` — the direct replacement for `getCollections()`), `save(body)` returning `{ document, alreadyExisted }` from the 201/200 split. Two API versions behind one client and one token. Wrapped by the rate limiter. **No `delete()` method is written at all** (R11): the restraint is enforced by absence, not by discipline. `search()`, `recent()` and `createLink()`'s duplicate machinery are gone |
 
 ### `src/obsidian/`
 
@@ -72,9 +74,9 @@ counterpart upstream.
 
 | File | Action | Notes |
 | --- | --- | --- |
-| `settingsTab.ts` | adapt, **do not port the compat shim** | upstream carries a dual declarative/imperative implementation for Obsidian < 1.13; a greenfield plugin has no installed users, so set `minAppVersion: 1.13` and write **only** `getSettingDefinitions()` — that deletes roughly half the file and all of its dual-path drift risk (red team A10). Port the hard parts: the `SecretComponent` pattern, the branded types, the rerender dance. Rows: token, connection test, default location (4 values — the API rejects `shortlist`), default tags (from `listTags()`), semantics map, index scope, sync controls. Base URL / deep-link target / collection / cache TTL rows are deleted |
+| `settingsTab.ts` | adapt, **do not port the compat shim** | upstream carries a dual declarative/imperative implementation for Obsidian < 1.13; a greenfield plugin has no installed users, so set `minAppVersion: 1.13` and write **only** `getSettingDefinitions()` — that deletes roughly half the file and all of its dual-path drift risk (red team A10). Port the hard parts: the `SecretComponent` pattern, the branded types, the rerender dance. Rows: token, connection test, default location (4 values — the API rejects `shortlist`), default tags (from `listTags()`), **the ordered tag→colour rule list** (add / remove / **reorder**, keys offered from `listTags()`), default colour, tier-2 index toggle + scope with its cost stated, sync controls. Base URL / deep-link target / collection / cache TTL rows are deleted |
 | `picker.ts` | adapt | `SuggestModal` over the local index instead of a network search; empty query → most-recently-updated; unmatched URL → "Save to Reader" |
-| `panel.ts` | adapt | same `ItemView`, same toolbar, same insert-at-cursor and reading-mode handling. Source of highlights changes from `client.getHighlights(id)` + TTL cache to an index lookup + optional delta sync. Also renders the document-level `notes` field, which Linkwarden had no analogue for. Must distinguish *not synced yet* from *no highlights* (A6) and render orphans honestly (A7) |
+| `panel.ts` | adapt | same `ItemView`, same toolbar, same insert-at-cursor and reading-mode handling. Source of highlights changes from `client.getHighlights(id)` + TTL cache to an index lookup + optional delta sync. The colour bar is driven by the tag rules (R6) rather than an API field. Must distinguish *not synced yet* from *no highlights* (A6) and render a binding to an unknown document honestly (A7) |
 | `exportModal.ts` | adapt | same checkbox modal and vault-scan; per-export **location + tags** controls replace the collection dropdown; progress line driven by the rate limiter, with a cancel. Says plainly that "saved" does not mean "parsed" — Reader scrapes asynchronously and some pages fail (red team §5) |
 | `archive.ts` | adapt → `save.ts` | collapses to a single `POST /v3/save/`; the "already exists → search → bind" branch disappears |
 | `relink.ts` | verbatim | modulo the id type |
@@ -100,15 +102,13 @@ counterpart upstream.
 
 Each milestone ends green on `npm run typecheck && npm run lint && npm test && npm run build`.
 
-**M-1 — Verification spike. Before any code.** One access token, roughly ten
-requests, half a day. Settle the questions in [red-team.md §6](red-team.md):
-which field carries a highlight document's text (**blocking — F2 cannot be built
-without it**), whether `/v2/export/` beats `/v3/list/` on request count for a
-real library, whether the location-free `read.readwise.io/read/<id>` URL
-resolves, whether a highlight's `tags` are its own or its parent's, and whether
-Readwise normalizes URLs on save. Output: `docs/api-notes.md` plus redacted
-responses in `tests/fixtures/`. One of these answers can still change the
-architecture, which is exactly why it comes first.
+**M-1 — Verification spike. Before any code.** One access token, a handful of
+requests, half a day. Settle [red-team.md §6](red-team.md): does an exported
+book's `unique_url` carry the Reader document id (the join the whole design now
+rests on), how many requests does a real `/v2/export/` actually take, how quickly
+do fresh Reader highlights reach the Readwise library, does the location-free
+`read.readwise.io/read/<id>` URL resolve, and does Readwise normalize URLs on
+save. Output: `docs/api-notes.md` plus redacted responses in `tests/fixtures/`.
 
 **M0 — Scaffold.** Repo skeleton, build/test/lint tooling, CI + release
 workflows, `manifest.json` (`minAppVersion: 1.13`), empty plugin that loads.
@@ -121,35 +121,43 @@ verbatim as the first proof the toolchain works. _No Readwise code yet._
 connection test**. This is the milestone that delivers the headline UX: paste a
 token, press "Test connection", see "Connected".
 
-**M2 — Document index + picker (F1).** The documents half of F7 —
-`core/index.ts`, `core/sync.ts`, `core/persistence.ts`, the mock server — and
-then `core/urls.ts` and `ui/picker.ts` straight on top of it.
+**M2 — Export sync + index (tier 1).** `core/index.ts`, `core/sync.ts`,
+`core/persistence.ts`, the book→document join, and the mock server. One source
+(`GET /v2/export/`), one cursor, and — for most libraries — a first sync measured
+in seconds rather than minutes. Ends with a populated index and a sync status in
+settings.
 
-_Re-sequenced deliberately._ The obvious order is "whole index, then picker",
-but a documents-only index is roughly one request per 100 documents, so the
-picker is usable in about a minute of syncing, and the milestone ends with
-something a user can actually do. It also keeps the plan's longest stretch of
-invisible work from landing in one block.
+**M3 — Panel + picker (F2, F1).** `core/urls.ts`, `ui/panel.ts`, `ui/picker.ts`,
+`core/colorRules.ts` and the tag→colour rule editor in settings. Tier 1 already
+covers every source the user has highlighted, so both surfaces are useful on the
+default sync — the picker over highlighted sources, the panel over their
+highlights, colour-coded by the user's tag rules.
 
-**M3 — Highlight index + panel (F2).** The rest of F7 (highlight and note pulls,
-independent cursors, watermark, orphan handling) plus `ui/panel.ts`. Highlights
-sync in the background behind the picker from M2, which is what stops a large
-library's first sync from becoming a wall between the user and the product.
+_Re-sequenced from the earlier draft._ Choosing the export as the highlight
+source collapsed what had been two milestones (documents-only index, then
+highlights) into one cheap sync, and moved the colour rules forward from F4 to
+here, because the panel needs them for its colour bar.
 
-**M4 — F3 save/export.** `ui/exportModal.ts`, `ui/save.ts`, location + tags,
+**M4 — Tier-2 document index (R12).** The opt-in `GET /v3/list/` paging behind
+its settings toggle, extending the picker to documents the user has saved but not
+highlighted and giving F3 its "already in Reader" check. Separate milestone
+precisely because it is the expensive tier and must be able to ship late, or not
+at all, without blocking anything above it.
+
+**M5 — F3 save/export.** `ui/exportModal.ts`, `ui/save.ts`, location + tags,
 throttled batch with progress and cancel.
 
-**M5 — F4 insert as quote.** `core/quote.ts`, `core/semanticsMap.ts`, the map
-editor in settings, duplicate-block-id protection.
+**M6 — F4 insert as quote.** `core/quote.ts`, duplicate-block-id protection.
+The colour rules it needs already exist from M3; this milestone only adds the
+insertion itself.
 
-**M6 — F5 re-link, i18n, docs, release.** `ui/relink.ts`, `i18n/en.ts` +
+**M7 — F5 re-link, i18n, docs, release.** `ui/relink.ts`, `i18n/en.ts` +
 `de.ts`, README (usage / setup / **honest limitations** / network-use & privacy
 sections mirroring the Linkwarden README), `example-vault` polish, the
 community-plugin checklist from `knowledge/`, first tagged release.
 
 _Optional afterwards:_ F6 browsable tab; F8 write-back (`PATCH /v3/update/`,
-`/v3/bulk_update/`) — never `DELETE`; R3b colour enrichment via `/v2/export/`,
-unless M-1 promotes it to the primary highlight source.
+`/v3/bulk_update/`) — never `DELETE`.
 
 ## Test plan
 
@@ -167,11 +175,11 @@ tested, nothing touching Obsidian is.
 | `i18n.test.ts` | verbatim | de/en key parity |
 | `urls.test.ts` | rewritten | permissive parse: with and without each location segment, both hosts, **short and long ids**, query/fragment/trailing slash, non-Readwise URLs, and the canonical form round-tripping |
 | `quote.test.ts` | adapted | callout rendering, note line, block-id placement, and the boundary case that matters: a short id must not match inside a longer one |
-| `semanticsMap.test.ts` | adapted | tag → callout/tag, default rule, unknown key |
-| `client.test.ts` | adapted | fake `HttpClient`: auth header shape, **201 vs 200 on save**, `nextPageCursor` paging, `limit` handling, 4xx error text, **429 + `Retry-After`**, and that the client's location value is read back from the response rather than assumed (the API silently substitutes a location the user has not enabled) |
+| `colorRules.test.ts` | adapted | **first-match-wins over an ordered rule list**, a highlight matching several rules, highlight tags taking precedence over book tags, no tags at all → the default colour, reordering changes the outcome |
+| `client.test.ts` | adapted | fake `HttpClient`: auth header shape, v2 export paging and its nested-highlight shape, **201 vs 200 on save**, `nextPageCursor` paging, `limit` handling, 4xx error text, **429 + `Retry-After`**, and that the client's location value is read back from the response rather than assumed (the API silently substitutes a location the user has not enabled) |
 | `rateLimit.test.ts` | new | token bucket with an injected clock: burst, refill, two independent buckets |
-| `index.test.ts` | new | merge a page, group highlights by `parent_id`, attach notes to highlights, fuzzy search ranking, sort by `created_at`, **watermark semantics** (unsynced vs genuinely empty), orphaned highlight, binding to an unknown document |
-| `sync.test.ts` | new | full pull over N fake pages, delta by `updatedAfter`, independent document/highlight/note cursors, cancel mid-run, cursor persistence, resume after failure, two concurrent "sync now" calls coalescing into one |
+| `index.test.ts` | new | merge an export page; **the join**: `unique_url` hit, `source_url` fallback, and a book that joins to nothing landing in `unjoined` rather than erroring; fuzzy search ranking; sort by `location` then `highlighted_at`; **watermark semantics** (unsynced vs genuinely empty); a binding to an unknown document |
+| `sync.test.ts` | new | full pull over N fake export pages, delta by `updatedAfter`, tier-1-only vs tier-1+2, independent cursors per tier, cancel mid-run, cursor persistence, resume after failure, two concurrent "sync now" calls coalescing into one, **and an assertion on the request count itself** — the cheapness claim is the design, so it gets a test |
 | `fixtures.test.ts` | new | parse the recorded redacted responses in `tests/fixtures/` into the hand-written models — the R9 replacement for the OpenAPI drift test |
 | `persistence.test.ts` | new | debounced writes coalesce; a corrupt or absent index file degrades to "rebuild", never to a crash (the index is derived state — see red team A4) |
 
@@ -188,10 +196,11 @@ where each risk is paid for.
 
 | Risk | Absorbed by |
 | --- | --- |
-| **Highlight text may not be retrievable from `/v3/list/`** — F2 depends on it and no documented field is it | **M-1**, before any code. If the answer is bad, the primary highlight source becomes `/v2/export/` and M3 changes shape |
-| **First sync could take ~35 minutes** for a large library, landing right after the token is pasted — against a "ready to go" promise | documents-first sequencing (M2 ships the picker in ~1 minute of syncing, M3 backfills highlights); index scope excludes `feed`; `/v2/export/` measured in M-1 as a cheaper highlight source |
+| **The book→document join may not work** — if an exported book's `unique_url` is not the Reader URL, tier 1 alone cannot bind highlights and R12's default changes | **M-1**, before any code. `source_url` against the tier-2 index is the designed fallback, but it makes the expensive tier mandatory |
+| **First sync could take ~35 minutes** for a large library, landing right after the token is pasted — against a "ready to go" promise | **solved by R3/R12**: the default sync is the v2 export alone, whose cost scales with *books*, not highlights; the expensive per-100-documents v3 index is opt-in and off by default. M-1 measures the real number, and `sync.test.ts` asserts on it |
 | **A multi-megabyte index in `data.json`** stalls startup, rewrites on every panel refresh, and produces vault-sync conflict files | `core/persistence.ts`: separate file, debounced writes, settings stay in `data.json` |
-| **`updatedAfter` never reports deletions**, so the panel goes silently stale | independent cursors per category, "rebuild index" treated as a correctness backstop rather than a nicety, and the limitation stated in the README |
+| **`updatedAfter` never reports deletions**, so the panel goes silently stale | independent cursors per tier, "rebuild index" treated as a correctness backstop rather than a nicety, and the limitation stated in the README |
+| **Reader highlights may reach the Readwise export with a delay** — the panel would look broken right after highlighting | measured in M-1; if there is a lag, the refresh action says so instead of showing an empty group |
 | **"Not synced yet" is indistinguishable from "no highlights"** | watermark + resume cursor in the index shape, specified before `sync.ts` is written |
 | **Rate limits are per token and shared** with the user's other Readwise tools | budget below the published limits, treat `429` as normal, coalesce repeated syncs |
 | **No OpenAPI spec** → silent upstream drift, which the Linkwarden plugin caught automatically | fixture contract tests + a dated `docs/api-notes.md`; drift shows up as a failing fixture parse rather than a spec diff |
