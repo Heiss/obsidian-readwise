@@ -449,36 +449,23 @@ oversight.
   count for the common case, with the expensive tier available to whoever wants
   it.
 
-## Open questions to verify against a live account
+## Empirical unknowns, and how the build absorbs them
 
-The official docs (2026-09-01) settled page size (`limit`, 1–100, default 100),
-per-endpoint rate limits, `tag` singular, `GET /v2/auth/` → 204, and — verbatim —
-that a note's `parent_id` is its **highlight**, not the article. Choosing the v2
-export as the highlight source (R3) settled two more: the highlighted text is the
-documented `text` field, and per-highlight `tags` arrive in the same payload,
-so R6 no longer depends on an unknown.
+**None of these are decisions.** They are facts about Readwise's API that only a
+live account answers, and every one has a defensive default so no milestone is
+blocked waiting on them. The runnable checklist is in
+[api-notes.md](api-notes.md); run it whenever convenient and the defensive paths
+can be simplified away.
 
-What remains, in order of what rides on it:
+| # | Unknown | Default the code ships with |
+| --- | --- | --- |
+| 1 | Does an exported book's `unique_url` carry the Reader document id? | **Both join paths are implemented**: `unique_url` first, `source_url` second, `unjoined` otherwise. If `unique_url` works, the fallback simply never fires; if it does not, tier 2 stops being optional and the settings default flips. Either way the code is correct |
+| 2 | How many requests does a real `/v2/export/` take? | The sync counts its own requests and surfaces the number. If it is worse than expected, that is a settings default to change, not a redesign |
+| 3 | Do Reader highlights reach the Readwise export promptly? | The panel shows the index's own sync timestamp, so a lag reads as "synced 2 minutes ago" rather than as an empty panel |
+| 4 | Do highlights carry their own `tags`, or only their book's? | R6 reads highlight tags first and falls back to `book_tags`. Works either way; only the *granularity* of the colour feature changes, and the README says so |
+| 5 | Does the location-free `read.readwise.io/read/<id>` URL resolve? | The parser is permissive (R10), so notes stay correct whichever form is written. Only the emitted string would change |
+| 6 | Does Readwise normalize URLs on save? | F3 dedups on the id the server returns, not on the URL it sent, so a normalization surprise costs a duplicate document at worst — never a wrong binding |
 
-1. **Does `unique_url` on an exported book give the Reader document id?** This is
-   now the load-bearing unknown: it is what joins a highlight to its binding. The
-   `source_url` fallback covers the case where it does not, but only for
-   documents the tier-2 index has seen — so if `unique_url` is not the
-   `read.readwise.io` URL, tier 1 alone stops being sufficient and R12's default
-   changes. One `GET /v2/export/?ids=<a Reader book>` answers it.
-2. **How many requests does a real export actually take?** The v2 export's page
-   size is not documented — it paginates by `nextPageCursor` over books. The
-   whole R3/R12 argument rests on this being much cheaper than paging highlights
-   individually; measure it rather than assume it.
-3. **Do all Reader highlights reach the Readwise library, and how quickly?** The
-   export is a Readwise-side view. If a fresh Reader highlight takes minutes to
-   appear there, the panel's "refresh" needs to say so rather than look broken.
-4. **Whether the location-free `https://read.readwise.io/read/<id>` resolves.**
-   Only affects which string is written into notes; the permissive parser (R10)
-   keeps the plugin correct either way.
-5. **Whether Readwise normalizes URLs on save** (trailing slash, `www`, tracking
-   parameters), which decides whether F3 needs to strip tracking parameters
-   before saving to avoid duplicate documents.
-
-Record the answers in `docs/api-notes.md` and capture redacted responses into
-`tests/fixtures/` as they are confirmed (R9).
+The one that could still move the design is **#1**, and only in the direction of
+making tier 2 mandatory. It changes a default, not an architecture — which is
+why implementation starts without it.

@@ -102,13 +102,11 @@ counterpart upstream.
 
 Each milestone ends green on `npm run typecheck && npm run lint && npm test && npm run build`.
 
-**M-1 — Verification spike. Before any code.** One access token, a handful of
-requests, half a day. Settle [red-team.md §6](red-team.md): does an exported
-book's `unique_url` carry the Reader document id (the join the whole design now
-rests on), how many requests does a real `/v2/export/` actually take, how quickly
-do fresh Reader highlights reach the Readwise library, does the location-free
-`read.readwise.io/read/<id>` URL resolve, and does Readwise normalize URLs on
-save. Output: `docs/api-notes.md` plus redacted responses in `tests/fixtures/`.
+**M-1 — Verification checklist. Runnable any time; blocks nothing.** The
+questions in [api-notes.md](api-notes.md) need a live Readwise token, which the
+build does not. Every one of them has a defensive default in the code (see the
+spec's *Empirical unknowns* table), so M0 onward proceed without them; running
+the checklist later lets defensive paths be deleted rather than added.
 
 **M0 — Scaffold.** Repo skeleton, build/test/lint tooling, CI + release
 workflows, `manifest.json` (`minAppVersion: 1.13`), empty plugin that loads.
