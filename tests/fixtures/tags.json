@@ -1,0 +1,12 @@
+{
+  "_comment": "GET /v3/tags/ — the source of the colour-rule key suggestions.",
+  "count": 5,
+  "nextPageCursor": null,
+  "results": [
+    { "key": "definition", "name": "definition" },
+    { "key": "objection", "name": "objection" },
+    { "key": "idea", "name": "idea" },
+    { "key": "papers", "name": "papers" },
+    { "key": "design", "name": "design" }
+  ]
+}

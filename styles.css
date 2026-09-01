@@ -1,0 +1,112 @@
+/* Settings: the inline connection-test result. */
+.rw-conn-status:empty {
+  display: none;
+}
+.rw-conn-status {
+  margin-top: var(--size-2-2);
+  font-size: var(--font-ui-smaller);
+}
+.rw-conn-status.is-ok {
+  color: var(--text-success);
+}
+.rw-conn-status.is-error {
+  color: var(--text-error);
+}
+
+/* A Readwise token is unscoped, so the warning stays visible rather than
+   hiding behind a tooltip. */
+.rw-token-scope {
+  margin-top: var(--size-2-2);
+  color: var(--text-muted);
+  font-size: var(--font-ui-smaller);
+}
+
+.rw-sync-status {
+  margin-top: var(--size-2-2);
+  color: var(--text-muted);
+  font-size: var(--font-ui-smaller);
+}
+
+/* Picker suggestions. */
+.rw-suggest-sub {
+  display: block;
+  color: var(--text-muted);
+  font-size: var(--font-ui-smaller);
+}
+.rw-suggest-empty {
+  padding: var(--size-4-3);
+  color: var(--text-muted);
+}
+
+/* The highlight panel. */
+.rw-panel-empty {
+  padding: var(--size-4-2) var(--size-4-3);
+  color: var(--text-muted);
+  font-size: var(--font-ui-small);
+}
+
+.rw-source {
+  padding: var(--size-4-2) 0;
+  border-bottom: 1px solid var(--background-modifier-border);
+}
+
+.rw-source-title {
+  padding: 0 var(--size-4-3) var(--size-2-2);
+  font-weight: var(--font-semibold);
+}
+
+.rw-highlight {
+  display: flex;
+  gap: var(--size-4-2);
+  padding: var(--size-2-2) var(--size-4-3);
+}
+
+/* The colour bar is the whole point of the tag rules, so it is a real block of
+   colour rather than a tint. */
+.rw-color-bar {
+  flex: 0 0 3px;
+  border-radius: 3px;
+  background-color: var(--rw-highlight-color, var(--text-accent));
+}
+
+.rw-highlight-body {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.rw-highlight-text {
+  white-space: pre-wrap;
+  font-size: var(--font-ui-small);
+}
+
+.rw-highlight-note {
+  margin-top: var(--size-2-2);
+  padding-left: var(--size-4-2);
+  border-left: 2px solid var(--background-modifier-border);
+  color: var(--text-muted);
+  font-size: var(--font-ui-smaller);
+  white-space: pre-wrap;
+}
+
+.rw-highlight-tags {
+  margin-top: var(--size-2-1);
+  color: var(--text-faint);
+  font-size: var(--font-ui-smaller);
+}
+
+/* Kept out of the way until the highlight is hovered or focused, so the panel
+   reads as prose rather than as a wall of buttons. */
+.rw-highlight-actions {
+  margin-top: var(--size-2-1);
+  opacity: 0;
+  transition: opacity 100ms ease-in-out;
+}
+.rw-highlight:hover .rw-highlight-actions,
+.rw-highlight:focus-within .rw-highlight-actions {
+  opacity: 1;
+}
+
+.rw-highlight-insert {
+  padding: var(--size-2-1) var(--size-2-3);
+  font-size: var(--font-ui-smaller);
+}

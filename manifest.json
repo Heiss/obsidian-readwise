@@ -1,0 +1,10 @@
+{
+  "id": "readwise-reader",
+  "name": "Readwise Reader",
+  "version": "0.1.0",
+  "minAppVersion": "1.13.0",
+  "description": "Link your Readwise Reader documents, save URLs to Reader, show their highlights beside your notes, and insert highlights as quotes.",
+  "author": "Peter Heiss",
+  "authorUrl": "https://github.com/Heiss",
+  "isDesktopOnly": false
+}

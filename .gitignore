@@ -1,0 +1,18 @@
+# build output
+main.js
+*.map
+
+# dependencies
+node_modules/
+
+# editor / os
+.DS_Store
+.idea/
+*.log
+
+# example vault: ignore Obsidian runtime state and the copied plugin build
+example-vault/.obsidian-runtime/
+example-vault/.obsidian/workspace*.json
+example-vault/.obsidian/plugins/readwise-reader/main.js
+example-vault/.obsidian/plugins/readwise-reader/styles.css
+example-vault/.obsidian/plugins/readwise-reader/manifest.json
