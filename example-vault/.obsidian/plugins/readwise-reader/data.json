@@ -1,0 +1,9 @@
+{
+  "settings": {
+    "apiBase": "http://localhost:8788/api",
+    "tokenFallback": "demo-token",
+    "defaultLocation": "new",
+    "defaultTags": ["obsidian"],
+    "indexAllDocuments": false
+  }
+}

@@ -1,0 +1,94 @@
+{
+  "_comment": "GET /v2/export/ — the plugin's highlight source. Highlights arrive nested inside their book, which is why one request covers a whole source.",
+  "count": 3,
+  "nextPageCursor": null,
+  "results": [
+    {
+      "user_book_id": 101,
+      "title": "On Retrieval-Augmented Generation",
+      "author": "J. Researcher",
+      "readable_title": "On Retrieval-Augmented Generation",
+      "source": "reader",
+      "unique_url": "https://read.readwise.io/read/01gkqtdz9xabcd5gt96khreyb",
+      "source_url": "https://example.org/on-rag",
+      "category": "articles",
+      "book_tags": [{ "id": 1, "name": "papers" }],
+      "highlights": [
+        {
+          "id": 1571,
+          "text": "Retrieval-augmented generation grounds a model's output in an external corpus.",
+          "note": null,
+          "location": 12,
+          "location_type": "offset",
+          "color": "yellow",
+          "highlighted_at": "2026-02-10T09:12:00Z",
+          "tags": [{ "id": 2, "name": "definition" }]
+        },
+        {
+          "id": 1572,
+          "text": "The retrieval step is where most systems actually fail.",
+          "note": "Matches what we saw in the eval — it was never the generator.",
+          "location": 44,
+          "location_type": "offset",
+          "color": "red",
+          "highlighted_at": "2026-02-10T09:15:00Z",
+          "tags": [{ "id": 3, "name": "objection" }]
+        },
+        {
+          "id": 1573,
+          "text": "Chunking is a lossy summarisation step that nobody calls one.",
+          "note": null,
+          "location": 90,
+          "location_type": "offset",
+          "color": "green",
+          "highlighted_at": "2026-02-10T09:20:00Z",
+          "tags": [{ "id": 4, "name": "idea" }]
+        }
+      ]
+    },
+    {
+      "user_book_id": 102,
+      "title": "The Nature of Order",
+      "author": "C. Alexander",
+      "source": "reader",
+      "unique_url": "https://read.readwise.io/read/01gwfvp9pyaabcdgmx14f6ha0",
+      "source_url": "https://example.org/nature-of-order",
+      "category": "articles",
+      "book_tags": [{ "id": 5, "name": "design" }],
+      "highlights": [
+        {
+          "_comment": "No location — exercises the rule that positionless highlights sort last rather than jumping to the front.",
+          "id": 2001,
+          "text": "A living structure is made of centres that help each other come alive.",
+          "note": null,
+          "location": null,
+          "color": null,
+          "highlighted_at": "2026-01-30T18:00:00Z",
+          "tags": []
+        }
+      ]
+    },
+    {
+      "_comment": "A Kindle book: no Reader document, so it can never join to a binding. Normal traffic, not an error — the sync reports it as skipped.",
+      "user_book_id": 103,
+      "title": "A Book Read on Kindle",
+      "author": "Someone Else",
+      "source": "kindle",
+      "unique_url": null,
+      "source_url": null,
+      "category": "books",
+      "book_tags": [],
+      "highlights": [
+        {
+          "id": 3001,
+          "text": "This highlight has no Reader document to attach to.",
+          "note": null,
+          "location": 1,
+          "color": null,
+          "highlighted_at": "2026-01-01T00:00:00Z",
+          "tags": []
+        }
+      ]
+    }
+  ]
+}

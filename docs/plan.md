@@ -102,6 +102,8 @@ counterpart upstream.
 
 Each milestone ends green on `npm run typecheck && npm run lint && npm test && npm run build`.
 
+**Status:** M0–M3 are built (178 tests). M4 onward are next.
+
 **M-1 — Verification checklist. Runnable any time; blocks nothing.** The
 questions in [api-notes.md](api-notes.md) need a live Readwise token, which the
 build does not. Every one of them has a defensive default in the code (see the

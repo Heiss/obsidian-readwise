@@ -10,6 +10,7 @@ import type ReadwisePlugin from "../main";
 import { asTokenValue } from "../core/secretId";
 import { mountSecretName } from "../obsidian/secretComponent";
 import type { WritableLocation } from "../api/models";
+import { indexStats } from "../core/index";
 import { t } from "../i18n";
 
 // Declarative settings only (Obsidian >= 1.13). The Linkwarden plugin this is
@@ -94,6 +95,22 @@ export class ReadwiseSettingTab extends PluginSettingTab {
         name: s.indexName,
         desc: s.indexDesc,
         control: { type: "toggle", key: "indexAllDocuments" },
+      },
+      {
+        type: "group",
+        heading: s.syncHeading,
+        items: [
+          {
+            name: s.syncNow,
+            desc: s.syncNowDesc,
+            render: (setting) => this.renderSyncNow(setting),
+          },
+          {
+            name: s.rebuild,
+            desc: s.rebuildDesc,
+            render: (setting) => this.renderRebuild(setting),
+          },
+        ],
       },
     ];
   }
@@ -316,6 +333,65 @@ export class ReadwiseSettingTab extends PluginSettingTab {
               callout: "quote",
             });
             await this.plugin.saveSettings();
+            this.update();
+          }),
+      );
+  }
+
+  private renderSyncNow(setting: Setting): void {
+    const m = t().settings;
+    const stats = indexStats(this.plugin.index);
+    const synced = this.plugin.index.highlightsSyncedAt;
+
+    const desc = new DocumentFragment();
+    desc.append(m.syncNowDesc);
+    desc.createDiv({
+      cls: "rw-sync-status",
+      text:
+        synced === undefined
+          ? m.neverSynced
+          : m.syncStatus(stats.documents, stats.highlights, stats.sources),
+    });
+    // Kindle books and podcasts have no Reader document, so they can never be
+    // linked. Saying so beats letting the numbers look mysteriously short.
+    if (stats.unjoined > 0) {
+      desc.createDiv({ cls: "rw-sync-status", text: m.unjoinedNote(stats.unjoined) });
+    }
+
+    setting
+      .setName(m.syncNow)
+      .setDesc(desc)
+      .addButton((b) =>
+        b
+          .setButtonText(this.plugin.sync.isRunning ? m.syncRunning : m.syncNow)
+          .setCta()
+          .setDisabled(this.plugin.sync.isRunning)
+          .onClick(async () => {
+            await this.plugin.syncNow();
+            this.update();
+          }),
+      )
+      .addExtraButton((b) =>
+        b
+          .setIcon("x")
+          .setTooltip(m.syncCancel)
+          .setDisabled(!this.plugin.sync.isRunning)
+          .onClick(() => this.plugin.sync.cancel()),
+      );
+  }
+
+  private renderRebuild(setting: Setting): void {
+    const m = t().settings;
+    setting
+      .setName(m.rebuild)
+      .setDesc(m.rebuildDesc)
+      .addButton((b) =>
+        b
+          .setButtonText(m.rebuild)
+          .setDestructive()
+          .setDisabled(this.plugin.sync.isRunning)
+          .onClick(async () => {
+            await this.plugin.rebuildIndex();
             this.update();
           }),
       );

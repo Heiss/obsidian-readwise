@@ -102,6 +102,11 @@ does not, and `minAppVersion` is 1.13 so it never needs to.
 
 ## Status
 
-M0 (scaffold + pure logic) and M1 (API layer, rate limiting, token storage,
-settings UX) are done. M2 onward — the index, sync, panel, picker, save/export —
-are specified in `docs/plan.md` and not yet built.
+MVP built: M0 (scaffold + pure logic), M1 (API layer, rate limiting, token
+storage, settings), M2 (index + export sync) and M3 (panel, picker, insert as
+quote). Still to come, specified in `docs/plan.md`: F3 save-note-URLs-to-Reader,
+F5 re-link, F6 browsable tab, F8 write-back.
+
+`example-vault/` runs the whole thing against `example-vault/mock-readwise/server.mjs`,
+which serves `tests/fixtures/` — the same files `tests/fixtures.test.ts` parses,
+so the mock cannot drift from what the tests assert.
